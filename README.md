@@ -1,8 +1,13 @@
-# PUBLISHER.KAFKA
+# PUBLISHER.KAFKA - Produtor Kafka
 
 ## Descrição
 
-API para publicação e consulta de informações de issues do GitHub. Este serviço é responsável por receber dados de usuários e repositórios do GitHub e publicá-los em tópicos Kafka para processamento por outros sistemas.
+Este microsserviço é o **ponto de entrada** no fluxo de processamento da aplicação. É responsável por receber dados de usuários e repositórios do GitHub via API REST e publicá-los no tópico Kafka para processamento pelos outros microsserviços.
+
+**Parte 1 do fluxo integrado de 3 microsserviços:**
+1. **Producer Kafka (este)** - Recebe solicitações e publica no Kafka
+2. [Orchestrador](../swap-orchestrador/README.md) - Consome mensagens, processa e persiste no MongoDB
+3. [Webhook Publisher](../swap-webhook-publishing/README.md) - Publica informações via webhook
 
 ## Tecnologias Utilizadas
 
@@ -21,24 +26,37 @@ API para publicação e consulta de informações de issues do GitHub. Este serv
 - IDE compatível com Spring Boot (IntelliJ IDEA, Eclipse, VS Code)
 
 ### Testes e Execução
-- Docker e Docker Compose (para Kafka, Zookeeper e Schema Registry)
+- Docker e Docker Compose (para infraestrutura)
 
 ## Como Executar
 
 ### 1. Preparando o Ambiente
 
-Certifique-se de ter o ambiente Kafka configurado. Você pode usar o orchestrador para isso:
+Para executar toda a aplicação integrada, é recomendado usar o Docker Compose da raiz do projeto:
 
 ```bash
-# Clone o repositório do orchestrador
-git clone https://github.com/flpfraga/swap-orchestrador.git
-
-# Inicie os containers Docker
-cd swap-orchestrador
+# Na raiz do projeto
 docker-compose up -d
 ```
 
-### 2. Executando a Aplicação
+Se preferir executar apenas o ambiente de infraestrutura:
+
+```bash
+# Kafka, Schema Registry e MongoDB
+cd ../swap-orchestrador/docker
+docker-compose up -d
+```
+
+### 2. Ordem de Execução dos Microsserviços
+
+Para garantir o funcionamento correto, inicie os serviços na seguinte ordem:
+
+1. Infraestrutura (Kafka, Schema Registry, MongoDB)
+2. **Producer Kafka (este serviço)** - porta 8090
+3. [Orchestrador](../swap-orchestrador/README.md) - porta 8080
+4. [Webhook Publisher](../swap-webhook-publishing/README.md) - porta 8099
+
+### 3. Executando Este Serviço
 
 #### Utilizando Maven
 ```bash
@@ -55,10 +73,24 @@ mvn spring-boot:run
 java -jar target/producer-0.0.1-SNAPSHOT.jar
 ```
 
-### 3. Verificando o Status
+#### Utilizando Docker
+```bash
+# Na raiz deste projeto
+docker build -t publisher-kafka .
+docker run -p 8090:8090 publisher-kafka
+```
+
+### 4. Verificando o Status
 
 O serviço estará disponível em http://localhost:8090
-Endpoints de monitoramento (Actuator): http://localhost:8090/actuator
+Endpoints de monitoramento (Actuator): http://localhost:8090/actuator/health
+
+## Como Testar o Fluxo Completo
+
+1. Inicie os três serviços na ordem correta
+2. Use o endpoint abaixo para publicar uma mensagem
+3. Verifique o processamento no Orchestrador via logs
+4. Observe o resultado final no endpoint webhook configurado
 
 ## Endpoints da API
 
@@ -68,26 +100,29 @@ Endpoints de monitoramento (Actuator): http://localhost:8090/actuator
 - **Corpo da Requisição**:
 ```json
 {
-  "topicName": "nome-do-topico",
+  "topicName": "github-issue-topic",
   "user": "nome-usuario-github",
   "repository": "nome-repositorio-github"
 }
 ```
 - **Resposta de Sucesso**: "Mensagem publicada com sucesso!"
 
-## Arquitetura da Solução
+## Arquitetura da Solução Completa
 
 ```mermaid
 flowchart TD
-    subgraph Kafka
-        A[PUBLISHER.KAFKA] --> B[USER-REPOSITORY-GITHUB-TOPIC]
+    subgraph "1. Produtor Kafka (porta 8090)"
+        A[PUBLISHER.KAFKA] --> B[github-issue-topic]
     end
 
     B --> C[ORCHESTRADOR]
-    C --> D[MONGODB]
-    C --> E[INFO-REPOSITORY-GITHUB-TOPIC]
     
-    subgraph Webhook
+    subgraph "2. Orchestrador (porta 8080)"
+        C --> D[MONGODB]
+        C --> E[INFO-REPOSITORY-GITHUB-TOPIC]
+    end
+    
+    subgraph "3. Webhook Publisher (porta 8099)"
         E --> F[PUBLISHER.WEBHOOK]
         F --> G[WEBHOOK-API]
     end
@@ -95,7 +130,7 @@ flowchart TD
 
 ## Configurações
 
-As principais configurações da aplicação podem ser ajustadas no arquivo `application.properties`:
+As principais configurações da aplicação podem ser ajustadas no arquivo `application.properties` ou via variáveis de ambiente no Docker:
 
 ```properties
 # Porta do servidor
@@ -111,12 +146,22 @@ kafka.topic.github.partitions=3
 kafka.topic.github.replicas=1
 ```
 
-## Integração com Outros Serviços
+## Links para os Outros Microsserviços
 
-Este serviço faz parte de um ecossistema maior e integra-se com:
+Este serviço faz parte de uma solução composta por três microsserviços:
 
-1. [Orchestrador](https://github.com/flpfraga/swap-orchestrador) - Serviço que consome os dados publicados e orquestra o fluxo de processamento
-2. [Publisher Webhook](https://github.com/flpfraga/swap-webhook-publishing) - Serviço que consome dados do tópico INFO-REPOSITORY-GITHUB-TOPIC e publica via Webhooks
+1. **Publisher Kafka (este)** - Ponto de entrada que recebe requisições REST e publica no Kafka
+2. [Orchestrador](../swap-orchestrador/README.md) - Middleware que processa dados, persiste no MongoDB e publica em outro tópico
+3. [Webhook Publisher](../swap-webhook-publishing/README.md) - Serviço final que consome do Kafka e publica via webhook
+
+## Troubleshooting
+
+Se encontrar problemas:
+
+1. Verifique se o Kafka está acessível na porta configurada
+2. Confirme se o Schema Registry está funcionando
+3. Confira os logs de cada aplicação para identificar erros
+4. Certifique-se de que os tópicos Kafka foram criados corretamente
 
 ## Desenvolvimento
 
